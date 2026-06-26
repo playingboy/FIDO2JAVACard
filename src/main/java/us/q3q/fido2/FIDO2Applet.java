@@ -1274,7 +1274,7 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
      * @param publicKeyOffset Offset into write buffer
      * @return true if successful, false if not.
      */
-    private boolean makeGoodKeyPair(KeyPair keyPair, byte[] publicKeyBuffer, short publicKeyOffset) {
+    /*private boolean makeGoodKeyPair(KeyPair keyPair, byte[] publicKeyBuffer, short publicKeyOffset) {
         for (short i = 1; i <= MAX_ATTEMPTS_TO_GET_GOOD_KEY; i++) {
             keyPair.genKeyPair();
 
@@ -1291,6 +1291,42 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
                 return true;
             }
         }
+        return false;
+    }*/
+    private boolean makeGoodKeyPair(KeyPair keyPair, byte[] publicKeyBuffer, short publicKeyOffset) {
+        // 1. Generate the keypair EXACTLY ONCE to beat the iPhone NFC timeout clock
+        keyPair.genKeyPair();
+        if (publicKeyBuffer == null) {
+            return true;
+        }
+
+        ECPublicKey pubKey = (ECPublicKey) keyPair.getPublic();
+        
+        // 2. Read the public key into a temporary offset position
+        // We use a small offset cushion to allow for front-padding if necessary
+        short actualLength = pubKey.getW(publicKeyBuffer, (short)(publicKeyOffset + 3));
+
+        // 3. If the card natively output a perfect 65-byte uncompressed EC point, fix the alignment
+        if (actualLength == PUB_KEY_LENGTH) {
+            Util.arrayCopyNonAtomic(publicKeyBuffer, (short)(publicKeyOffset + 3), publicKeyBuffer, publicKeyOffset, PUB_KEY_LENGTH);
+            return true;
+        }
+
+        // 4. If the length is wrong, it's missing leading zeros. Dynamically pad it!
+        if (actualLength < PUB_KEY_LENGTH && actualLength > 0) {
+            short missingBytes = (short)(PUB_KEY_LENGTH - actualLength);
+            
+            // Shift the raw hardware bytes downstream to make room for padding
+            Util.arrayCopyNonAtomic(publicKeyBuffer, (short)(publicKeyOffset + 3), publicKeyBuffer, (short)(publicKeyOffset + missingBytes), actualLength);
+            
+            // Fill the missing leading byte slots with standard 0x00 padding
+            Util.arrayFillNonAtomic(publicKeyBuffer, publicKeyOffset, missingBytes, (byte)0x00);
+            
+            // Ensure the uncompressed EC point header byte is strictly 0x04 if it got shifted
+            publicKeyBuffer[publicKeyOffset] = (byte)0x04;
+            return true;
+        }
+
         return false;
     }
 
@@ -1635,7 +1671,7 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
      * @param off Offset at which to write counter
      */
     private void encodeCounter(byte[] buf, short off) {
-        random.generateData(buf, off, (short) 1);
+        random.nextBytes(buf, off, (short) 1);
         boolean ok = counter.increment((short)((buf[off] & 0x0E) + 1));
         if (!ok) {
             throwException(ISO7816.SW_FILE_FULL);
@@ -1816,7 +1852,7 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
         privKey.getS(scratch, scratchOff);
 
         // Generate random IV for new credential
-        random.generateData(outBuffer, outOffset, IV_LEN);
+        random.nextBytes(outBuffer, outOffset, IV_LEN);
         short payloadOffset = (short) (outOffset + IV_LEN);
 
         payloadOffset = Util.arrayCopyNonAtomic(rpIdHashBuffer, rpIdHashOffset,
@@ -1825,7 +1861,7 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
                 outBuffer, payloadOffset, KEY_POINT_LENGTH);
 
         outBuffer[payloadOffset++] = (byte)(rkNum >= 0 ? (0x80 | credProtectLevel) : credProtectLevel);
-        random.generateData(outBuffer, payloadOffset, (short) 15);
+        random.nextBytes(outBuffer, payloadOffset, (short) 15);
         payloadOffset += 15;
 
         symmetricWrapper.init(key, Cipher.MODE_ENCRYPT,
@@ -4105,7 +4141,7 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
         final short scratchSigOffset = bufferManager.getOffsetForHandle(scratchSigHandle);
         final byte[] scratchSigBuffer = bufferManager.getBufferForHandle(apdu, scratchSigHandle);
 
-        random.generateData(scratchSigBuffer, scratchSigOffset, (short) 1);
+        random.nextBytes(scratchSigBuffer, scratchSigOffset, (short) 1);
         counter.increment((short)((scratchSigBuffer[scratchSigOffset] & 0x0E) + 1));
 
         final short sigRPIDOffset = scratchSigOffset;
@@ -4226,7 +4262,7 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
 
         // Done with the input; start writing output!
         short outputLen = 0;
-        random.generateData(bufferMem, (short) 0, (short) 1);
+        random.nextBytes(bufferMem, (short) 0, (short) 1);
         short counterIncAmt = (short)((bufferMem[0] & 0x0E) + 1);
         bufferMem[outputLen++] = 0x05; // magic fixed first byte
         outputLen = Util.arrayCopyNonAtomic(publicKeyBuffer, publicKeyOffset,
@@ -5484,9 +5520,9 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
         JCSystem.beginTransaction();
         ok = false;
         try {
-            random.generateData(hmacWrapperBytesUV, (short) 0, (short) hmacWrapperBytesUV.length);
-            random.generateData(hmacWrapperBytesNoUV, (short) 0, (short) hmacWrapperBytesNoUV.length);
-            random.generateData(credentialVerificationKey, (short) 0, (short) credentialVerificationKey.length);
+            random.nextBytes(hmacWrapperBytesUV, (short) 0, (short) hmacWrapperBytesUV.length);
+            random.nextBytes(hmacWrapperBytesNoUV, (short) 0, (short) hmacWrapperBytesNoUV.length);
+            random.nextBytes(credentialVerificationKey, (short) 0, (short) credentialVerificationKey.length);
 
             residentKeys = new ResidentKeyData[NUM_RESIDENT_KEY_SLOTS_PER_BATCH];
             numResidentCredentials = 0;
@@ -5503,8 +5539,8 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
             pinRetryCounter.reset(pinIdx);
             Util.arrayFillNonAtomic(minPinRPIDs, (short) 0, (short) (MAX_RP_IDS_MIN_PIN_LENGTH * RP_HASH_LEN), (byte) 0x00);
 
-            random.generateData(pinKDFSalt, (short) 0, (short) pinKDFSalt.length);
-            random.generateData(highSecurityWrappingIV, (short) 0, (short) highSecurityWrappingIV.length);
+            random.nextBytes(pinKDFSalt, (short) 0, (short) pinKDFSalt.length);
+            random.nextBytes(highSecurityWrappingIV, (short) 0, (short) highSecurityWrappingIV.length);
 
             resetWrappingKeys(apdu);
 
@@ -5542,12 +5578,12 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
      * @param apdu Request/response object
      */
     private void resetWrappingKeys(APDU apdu) {
-        random.generateData(wrappingKeySpace, (short) 0, (short) wrappingKeySpace.length);
+        random.nextBytes(wrappingKeySpace, (short) 0, (short) wrappingKeySpace.length);
         lowSecurityWrappingKey.setKey(wrappingKeySpace, (short) 0);
 
-        random.generateData(wrappingKeySpace, (short) 0, (short) wrappingKeySpace.length);
+        random.nextBytes(wrappingKeySpace, (short) 0, (short) wrappingKeySpace.length);
         highSecurityWrappingKey.setKey(wrappingKeySpace, (short) 0);
-        random.generateData(wrappingKeyValidation, (short) 0, (short) 32);
+        random.nextBytes(wrappingKeyValidation, (short) 0, (short) 32);
 
         // Put the HMAC-SHA256 of the first half of wrappingKeyValidation into the second half
         // We'll use this to validate we have the correct wrapping key
@@ -6066,7 +6102,7 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
 
         if (pinProtocol == 2) {
             // Write out a random 16-byte IV and set up the wrapper to use it
-            random.generateData(outBuf, writeOffset, (short) 16);
+            random.nextBytes(outBuf, writeOffset, (short) 16);
             sharedSecretWrapper.init(sharedSecretAESKey, Cipher.MODE_ENCRYPT, outBuf, writeOffset, (short) 16);
             writeOffset += 16;
         } else {
@@ -6721,7 +6757,7 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
      */
     private void resetPinUseState() {
         transientStorage.setPinProtocolInUse((byte) 0, (byte) 0);
-        random.generateData(pinToken, (short) 0, (short) pinToken.length);
+        random.nextBytes(pinToken, (short) 0, (short) pinToken.length);
     }
 
     /**
@@ -7005,7 +7041,7 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
         pinCodePointLength = 0;
 
         // Trivial amounts of flash, object allocations without buffers
-        random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
+        random = RandomData.getInstance(RandomData.ALG_TRNG);
         keyAgreement = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DH_PLAIN, false);
         pinUnwrapper = getAES();
         pinWrapper = getAES();
@@ -7303,14 +7339,14 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
         // Five things are truly random and persist until we hard-FIDO2-reset the authenticator:
         // - The wrapping key (generated at first use of the applet)
         // - the salt we use for deriving keys from PINs
-        random.generateData(pinKDFSalt, (short) 0, (short) pinKDFSalt.length);
+        random.nextBytes(pinKDFSalt, (short) 0, (short) pinKDFSalt.length);
         // - the IV we use for encrypting and decrypting blobs sent by the authenticator TO the authenticator
-        random.generateData(highSecurityWrappingIV, (short) 0, (short) highSecurityWrappingIV.length);
+        random.nextBytes(highSecurityWrappingIV, (short) 0, (short) highSecurityWrappingIV.length);
         // - the keys we use for converting a credential private key into an hmac-secret ... uh ... secret
-        random.generateData(hmacWrapperBytesUV, (short) 0, (short) hmacWrapperBytesUV.length);
-        random.generateData(hmacWrapperBytesNoUV, (short) 0, (short) hmacWrapperBytesNoUV.length);
+        random.nextBytes(hmacWrapperBytesUV, (short) 0, (short) hmacWrapperBytesUV.length);
+        random.nextBytes(hmacWrapperBytesNoUV, (short) 0, (short) hmacWrapperBytesNoUV.length);
         // - the key for verifying credential blobs
-        random.generateData(credentialVerificationKey, (short) 0, (short) credentialVerificationKey.length);
+        random.nextBytes(credentialVerificationKey, (short) 0, (short) credentialVerificationKey.length);
 
         if (Util.arrayCompare(hmacWrapperBytesUV, (short) 0,
                 hmacWrapperBytesNoUV, (short) 0, (short) hmacWrapperBytesUV.length) == 0) {

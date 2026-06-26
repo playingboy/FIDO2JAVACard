@@ -120,7 +120,7 @@ public class ResidentKeyData {
             ivBufferLen += IV_LEN;
         }
         IVs = new byte[ivBufferLen];
-        random.generateData(IVs, (short) 0, ivBufferLen);
+        random.nextBytes(IVs, (short) 0, ivBufferLen);
 
         if (credBlobLen > 0) {
             credBlob = new byte[encryptableLength(credBlobLen)];
