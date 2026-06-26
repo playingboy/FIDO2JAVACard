@@ -1,0 +1,2 @@
+ 5078  gp --key-enc xxxxxxxxxxxxxxxxxxxxxxx --key-mac xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --key-dek xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --install build/javacard/FIDO2.cap --params a800f50505061820071904000818200918fe0a1904000b190400
+
