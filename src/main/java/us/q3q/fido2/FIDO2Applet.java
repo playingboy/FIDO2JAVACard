@@ -374,6 +374,8 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
      * Encrypted RPID hashes used for the minPinLength extension
      */
     private final byte[] minPinRPIDs;
+
+    private byte[] secureRpIdHashBuffer;
     /**
      * How many resident key slots are filled
      */
@@ -850,10 +852,14 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
         loadWrappingKeyIfNoPIN();
 
         final short scratchRPIDHashHandle = bufferManager.allocate(apdu, RP_HASH_LEN, BufferManager.ANYWHERE);
-        final short scratchRPIDHashOffset = bufferManager.getOffsetForHandle(scratchRPIDHashHandle);
-        final byte[] scratchRPIDHashBuffer = bufferManager.getBufferForHandle(apdu, scratchRPIDHashHandle);
-        sha256.doFinal(buffer, rpIdIdx, rpIdLen, scratchRPIDHashBuffer, scratchRPIDHashOffset);
+        short scratchRPIDHashOffset = bufferManager.getOffsetForHandle(scratchRPIDHashHandle);
+        byte[] scratchRPIDHashBuffer = bufferManager.getBufferForHandle(apdu, scratchRPIDHashHandle);
+        // 🔍 【核心注入】：在这里强行将指针重定向到安全区
+        scratchRPIDHashBuffer = secureRpIdHashBuffer;
+        scratchRPIDHashOffset = (short) 0;
 
+        // 2. 这样 doFinal 就会安全地写入到独立 RAM 空间
+        sha256.doFinal(buffer, rpIdIdx, rpIdLen, scratchRPIDHashBuffer, scratchRPIDHashOffset);
         if (pinAuthSuccess) {
             if (permissionsRpId[0] == 0x00) {
                 // No permissions RP ID set - we got this PIN token using default permissions.
@@ -6900,6 +6906,7 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
 
         // Next, read any overrides
         final short initOffset = offset;
+        secureRpIdHashBuffer = JCSystem.makeTransientByteArray((short)32, JCSystem.CLEAR_ON_DESELECT);
         if (length > 0) {
             short sb = ub(array[offset++]);
             short numOptions = (short)(sb - 0xA0);
