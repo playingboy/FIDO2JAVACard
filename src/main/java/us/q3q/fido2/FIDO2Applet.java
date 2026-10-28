@@ -407,6 +407,28 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
     };
 
+
+    // 1. 在 Applet 类中定义常量
+    private static final byte[] AID_NDEF = { (byte)0xD2, 0x76, 0x00, 0x00, (byte)0x85, 0x01, 0x01 };
+
+    // 模拟一个最基础的不可写、空的符合 NFC Forum 规范的 CC File (Capability Container)
+    // 告诉 iPhone：我是一张合法的 NDEF 卡，但我里面暂时没有存任何文本数据
+    private static final byte[] CC_FILE = {
+        0x00, 0x0F,       // CCLEN: 本容器长度 (15 字节)
+        0x20,             // Mapping Version: 2.0 规范
+        0x00, 0x3B,       // MLe: 最大可读取的 APDU 长度
+        0x00, 0x34,       // MLc: 最大可写入的 APDU 长度
+        0x04,             // T: NDEF File Control TLV Tag
+        0x06,             // L: 后面数据的长度 (6 字节)
+        (byte)0xE1, 0x04, // NDEF File ID (E1 04) -> 这里加了强转
+        0x00, (byte)0xFF, // Max NDEF File Size (255 字节)
+        0x00,             // Read Access: 0x00 (无条件允许读取)
+        (byte)0xFF        // Write Access: 0xFF (不允许写入/只读保护)
+    };
+
+    // 状态追踪变量（可根据实际情况使用）
+    private boolean isNdefSelected = false;
+
     /**
      * Deliver a particular byte array to the platform
      *
@@ -3507,10 +3529,35 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
             return;
         }
 
+        
+
         final byte[] apduBytes = apdu.getBuffer();
 
         final short cla_ins = Util.getShort(apduBytes, ISO7816.OFFSET_CLA);
         final short p1_p2 = Util.getShort(apduBytes, ISO7816.OFFSET_P1);
+        final short ins = Util.getShort(apduBytes, ISO7816.OFFSET_INS);
+
+        // 2. 拦截 iOS 随后的 NDEF 文件查询指令 (通常在选择 NDEF AID 之后发生)
+        if (isNdefSelected) {
+            // 如果 iOS 发送的是 Select File (0x00A4) 指令去选 CC File (ID: E103)
+            if (cla_ins == (byte)0x00 && ins == (byte)0xA4 && p1_p2 == (short)0x0000) {
+                // 无论是选 CC File (E103) 还是 NDEF Data File (E104)，都直接返回 9000 成功
+                return;
+            }
+            
+            // 如果 iOS 发送的是 Read Binary (0x00B0) 指令来读内容
+            if (cla_ins == (byte)0x00 && ins == (byte)0xB0) {
+                // 将我们预设好的、合法的空 NDEF 属性（CC_FILE）塞给 iOS 驱动
+                short le = apdu.setOutgoing();
+                if (le > (short)CC_FILE.length) {
+                    le = (short)CC_FILE.length;
+                }
+                apdu.setOutgoingLength(le);
+                apdu.sendBytesLong(CC_FILE, (short)0, le);
+                return; // 成功喂饱 iOS 驱动，退出
+            }
+        }
+
 
         if (cla_ins == (short) 0x8012 && p1_p2 == (short) 0x0100) {
             // Explicit disable command (NFCCTAP_CONTROL end CTAP_MSG). Turn off, and stay off.
@@ -4388,6 +4435,16 @@ public final class FIDO2Applet extends Applet implements ExtendedLength {
      */
     private void handleAppletSelect(APDU apdu) {
         apdu.setIncomingAndReceive();
+
+        byte[] buffer = apdu.getBuffer();
+    
+        // 检查 iOS 是不是在选择 NDEF AID
+        if (Util.arrayCompare(buffer, ISO7816.OFFSET_CDATA, AID_NDEF, (short)0, (short)AID_NDEF.length) == 0) {
+            isNdefSelected = true;
+            // 核心关键：绝对不能报错，必须优雅地返回 9000！告诉 iOS 找到了 NDEF 应用
+            return; 
+        }
+        isNdefSelected = false;
 
         if (apdu.getIncomingLength() < AID.length || Util.arrayCompare(AID, (short) 0,
                 apdu.getBuffer(), apdu.getOffsetCdata(), (short) AID.length) != 0) {
